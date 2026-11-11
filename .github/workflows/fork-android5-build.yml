@@ -3,12 +3,11 @@
 # 目的只有一个: 回答「这个 App 在 Android 5 上到底能不能起来」. 背景与已完成的分析见 docs/fork/android5.md.
 #
 # 与 fork-legacy-build.yml (API 25) 的区别:
-# - **两段式 minSdk**: Gradle 按 23 构建 (buildMinApi), 出包后把清单里的 minSdkVersion 二进制改成 21
-#   (targetMinApi, 见 patch-apk-min-sdk.py) 再重新签名.
-#   原因: 2026 年这一代 AndroidX 的底线是 23, manifest 合并只会拿声明的 minSdk 去和每个库比, 一个库报一次错,
-#   一轮 CI 六分钟; 而 D8 出的 dex 版本只取决于 minSdk < 24 与否 —— 21 和 23 都出 DEX 035,
-#   脱糖结果完全一样。所以「按 23 构建 + 事后改清单」产出的代码与「按 21 构建」逐字节等价。
-#   清单里那些 overrideLibrary 仍保留 (navigation-compose / onnxruntime 是 24, anitorrent 是 26, 23 也过不去)。
+# - minSdk 由 `-Pani.android.legacyMinSdk=21` 压到 21, 清单里对 108 个声明 23/24/26 的库做了 overrideLibrary
+#   (清单由 scan-android-minsdk.init.gradle 从 AAR 里扫出来, 不是手写的);
+# - 备用通道: 万一某个库的 minSdk 又涨上去, 可以把 buildMinApi 设成 23 —— 构建完由 patch-apk-min-sdk.py
+#   把清单里的 minSdkVersion 二进制改回 21 再重签. D8 出的 dex 版本只取决于 minSdk < 24 与否
+#   (21 和 23 都是 DEX 035), 所以两种路径产出的代码逐字节等价。
 # - 只出 arm64-v8a: 目标设备 (MStar 6A828) 是 64 位, 且它 /data 只剩几百 MB, universal 包塞不进去;
 # - 不需要任何仓库 Secret: 签名密钥在 runner 上现生成 (一次性), 要覆盖安装就得先卸载旧的;
 # - 末尾多一道 **dex 版本**校验: 只有源码重编、D8 按 minSdk < 24 出 DEX 035, Android 5 的 dex2oat 才认.
@@ -25,9 +24,9 @@ on:
         required: false
         default: '21'
       buildMinApi:
-        description: 'Gradle 构建时用的 minSdk (要满足依赖库的声明, 23 = Android 6.0)'
+        description: 'Gradle 构建时用的 minSdk (默认与 minApi 一致; 改成 23 则构建后自动把清单改回 minApi)'
         required: false
-        default: '23'
+        default: '21'
 permissions:
   contents: 'read'
 concurrency:
@@ -40,7 +39,7 @@ jobs:
     - 'ubuntu-24.04'
     env:
       MIN_API: '${{ inputs.minApi || ''21'' }}'
-      BUILD_MIN_API: '${{ inputs.buildMinApi || ''23'' }}'
+      BUILD_MIN_API: '${{ inputs.buildMinApi || ''21'' }}'
     steps:
       - id: 'step-0'
         uses: 'actions/checkout@v4'

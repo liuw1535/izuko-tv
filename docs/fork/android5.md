@@ -14,6 +14,21 @@ Android **5.0.1 / API 21**, /data 只剩 ~485 MB)。设备侧的探索记录见�
 2026 年这一代 AndroidX 的底线已经是 API 23 (Android 6.0)。把关键 AAR 的 `AndroidManifest.xml`
 读出来的结果:
 
+实测不是列举, 是扫出来的: **108 个包** 声明了 minSdk > 21 (97 个 = 23, 10 个 = 24, 1 个 = 26)。
+扫描命令:
+
+```bash
+./gradlew -I .github/workflows/scan-android-minsdk.init.gradle --no-configuration-cache \
+    -Pani.android.legacy=true -Pani.android.legacyMinSdk=21 :app:android:scanAndroidMinSdk
+```
+
+它直接读 Gradle 缓存里每个 AAR 的 `AndroidManifest.xml`, 输出里 `pkg=` 那一列就是
+`app/android/src/izukoTv/AndroidManifest.xml` 里 `tools:overrideLibrary` 要写的包名。
+依赖树一变就要重新跑一次 —— AI 手写这份清单一定会漏 (实测漏过 `androidx.datastore.preferences.core`、
+`org.jetbrains.androidx.compose.material3.adaptive.navigation`)。
+
+几个代表性的:
+
 | 依赖 | minSdk |
 |---|---|
 | Compose UI / Foundation / Material3 1.12.1 | 23 |
