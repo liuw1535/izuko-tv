@@ -46,7 +46,6 @@ import me.him188.ani.app.domain.media.resolver.HttpStreamingMediaResolver
 import me.him188.ani.app.domain.media.resolver.LocalFileMediaResolver
 import me.him188.ani.app.domain.media.resolver.MediaResolver
 import me.him188.ani.app.domain.media.resolver.CloudDriveMediaResolver
-import me.him188.ani.app.domain.mediasource.web.AndroidOnnxImageCaptchaRecognizer
 import me.him188.ani.app.domain.mediasource.web.captcha.AndroidCaptchaBrowserFactory
 import me.him188.ani.app.domain.mediasource.web.captcha.CaptchaBrowserFactory
 import me.him188.ani.app.domain.mediasource.web.captcha.ImageCaptchaRecognizer
@@ -115,7 +114,7 @@ fun getAndroidModules(
 ) = module {
     single<BrowserNavigator> { AndroidBrowserNavigator() }
     single<CaptchaBrowserFactory> { AndroidCaptchaBrowserFactory(androidContext()) }
-    single<ImageCaptchaRecognizer> { AndroidOnnxImageCaptchaRecognizer() }
+    single<ImageCaptchaRecognizer> { createImageCaptchaRecognizer() }
 
     single<TorrentEngineAccess> {
         if (supportsTorrentServiceProcess) serviceConnectionManager else AlwaysUseTorrentEngineAccess

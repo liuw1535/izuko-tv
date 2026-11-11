@@ -45,6 +45,14 @@ object AnitorrentLibraryLoader : TorrentLibraryLoader {
     @kotlin.jvm.Throws(IOException::class)
     private fun loadDependencies() {
         if (platform.isAndroid()) {
+            // anitorrent 的 .so 是用 ANDROID_PLATFORM=android-24 编的: 未定义符号里有 getifaddrs /
+            // if_nametoindex / __pread_chk / __pwrite_chk, 都是 API 24 才进 bionic 的. Android 5/6
+            // (API 21~23) 上 dlopen 会直接失败 (UnsatisfiedLinkError). 兼容包 (minSdk 21) 在这里
+            // 提前给出明确原因, 让调用方按「这台设备没有 BT」处理, 而不是抛一个无法归因的 Error.
+            val sdkInt = (platform as? Platform.Android)?.sdkInt
+            if (sdkInt != null && sdkInt < 24) {
+                throw IOException("anitorrent native library requires Android 7.0 (API 24), but this device is API $sdkInt")
+            }
             System.loadLibrary("anitorrent")
             return
         }

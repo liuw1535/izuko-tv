@@ -86,14 +86,25 @@ val Project.buildLegacyAndroidApp
     get() = getPropertyOrNull("ani.android.legacy")?.toBooleanStrict() ?: false
 
 /**
- * 兼容包的 minSdk. 25 = Android 7.1.1, 也是 ISRG Root X1 进入系统信任库的第一个版本 ——
+ * 兼容包的默认 minSdk. 25 = Android 7.1.1, 也是 ISRG Root X1 进入系统信任库的第一个版本 ——
  * 再往下 Let's Encrypt 签发的证书会直接握手失败, 得自带根证书才行.
  */
 const val LEGACY_ANDROID_MIN_SDK = 25
+
+/**
+ * 兼容包的 minSdk, 可用 `-Pani.android.legacyMinSdk=21` 覆盖默认的 [LEGACY_ANDROID_MIN_SDK].
+ *
+ * 21 (Android 5.0) 是**实验性**取值, 见 docs/fork/android5.md:
+ * - 依赖库里有一批声明 minSdk 23/24 的模块 (Compose 1.12 / activity 1.12 / lifecycle 2.11 / media3 1.9 /
+ *   room 2.8 / navigation-compose 2.10 / onnxruntime 1.22), 只能靠 manifest 的 `tools:overrideLibrary` 强推;
+ * - anitorrent 与 onnxruntime 的 .so 用到了 API 23/24 才有的 libc 符号, 在这类设备上加载不起来, 已按 SDK_INT 关掉.
+ */
+val Project.legacyAndroidMinSdk: Int
+    get() = getPropertyOrNull("ani.android.legacyMinSdk")?.toInt() ?: LEGACY_ANDROID_MIN_SDK
 
 /**
  * 所有 Android 模块的 minSdk 都必须读这里而不是直接读 `android.min.sdk` 属性:
  * 开兼容包时要整体下调, 否则库模块仍是 27, manifest 合并会直接失败.
  */
 val Project.androidMinSdk: Int
-    get() = if (buildLegacyAndroidApp) LEGACY_ANDROID_MIN_SDK else getIntProperty("android.min.sdk")
+    get() = if (buildLegacyAndroidApp) legacyAndroidMinSdk else getIntProperty("android.min.sdk")

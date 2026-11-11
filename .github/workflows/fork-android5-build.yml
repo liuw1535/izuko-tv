@@ -1,0 +1,217 @@
+# Fork-specific: 按需构建 Android 5.0 (API 21) 的**实验包**, 产物只作为 workflow artifact.
+#
+# 目的只有一个: 回答「这个 App 在 Android 5 上到底能不能起来」. 背景与已完成的分析见 docs/fork/android5.md.
+#
+# 与 fork-legacy-build.yml (API 25) 的区别:
+# - minSdk 由 `-Pani.android.legacyMinSdk=21` 压到 21, manifest 里对 23/24/26 的库做了 overrideLibrary;
+# - 只出 arm64-v8a: 目标设备 (M31/MStar 6A828) 是 64 位, 且它 /data 只剩几百 MB, universal 包塞不进去;
+# - 不需要任何仓库 Secret: 签名密钥在 runner 上现生成 (一次性), 要覆盖安装就得先卸载旧的;
+# - 末尾多一道 **dex 版本**校验: 只有源码重编、D8 按 minSdk 21 出 DEX 035, Android 5 的 dex2oat 才认.
+#   (拿 apktool 改 manifest 出来的包一定是 DEX 039, 装到 Android 5 上就是「无法进行 dex2oat 编译」.)
+#
+# 触发方式: Actions 页面手动 Run workflow. 刻意不创建 Release/prerelease —— UpdateChecker 拉的是
+# /releases 全量列表, 发出去会把实验包推给所有用户.
+name: 'Fork Android 5 Experimental Build (API 21)'
+on:
+  workflow_dispatch:
+    inputs:
+      minApi:
+        description: 'minSdk 覆盖值 (21 = Android 5.0)'
+        required: false
+        default: '21'
+permissions:
+  contents: 'read'
+concurrency:
+  group: '${{ github.workflow }}-${{ github.ref_name }}'
+  cancel-in-progress: true
+jobs:
+  build_android5:
+    name: 'Android 5 Build (Ubuntu 24.04)'
+    runs-on:
+    - 'ubuntu-24.04'
+    env:
+      MIN_API: '${{ inputs.minApi || ''21'' }}'
+    steps:
+      - id: 'step-0'
+        uses: 'actions/checkout@v4'
+        with:
+          submodules: 'recursive'
+      - id: 'step-1'
+        name: 'Free space for Ubuntu'
+        uses: 'jlumbroso/free-disk-space@v1.3.1'
+        with:
+          android: 'false'
+          large-packages: 'false'
+          tool-cache: 'false'
+      - id: 'step-2'
+        name: 'Enable Swap'
+        run: |-
+          sudo fallocate -l 10G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+      - id: 'step-3'
+        continue-on-error: true
+        run: 'rm local.properties'
+      - id: 'step-4'
+        continue-on-error: true
+        run: |-
+          echo "ani.android.abis=arm64-v8a" >> local.properties
+          echo "ani.dandanplay.app.id=${{ secrets.DANDANPLAY_APP_ID }}" >> local.properties
+          echo "ani.dandanplay.app.secret=${{ secrets.DANDANPLAY_APP_SECRET }}" >> local.properties
+          echo "ani.tmdb.api.token=${{ secrets.TMDB_API_TOKEN }}" >> local.properties
+          echo "ani.sentry.dsn=${{ secrets.SENTRY_DSN }}" >> local.properties
+          echo "kotlin.native.ignoreDisabledTargets=true" >> local.properties
+      - id: 'step-5'
+        continue-on-error: true
+        run: |-
+          echo "ani.enable.firebase=false" >> local.properties
+      # 与 fork-renew 系列一致: runner 镜像不带 compileSdk 用的那个 platform. 版本号跟 gradle.properties 的
+      # android.compile.sdk 对应 (API 37 起包 id 带 minor version). aapt2 / apksigner 也从这里来.
+      - id: 'setup-android-sdk'
+        name: 'Setup Android SDK'
+        uses: 'android-actions/setup-android@v3'
+        with:
+          accept-android-sdk-licenses: 'true'
+          packages: 'platform-tools platforms;android-37.0 build-tools;36.0.0'
+      - id: 'step-6'
+        name: 'Get JBR (Linux)'
+        env:
+          RUNNER_TOOL_CACHE: '${{ runner.tool_cache }}'
+          JBR_URL: 'https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk_jcef-21.0.5-linux-x64-b750.29.tar.gz'
+          JBR_CHECKSUM_URL: 'https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk_jcef-21.0.5-linux-x64-b750.29.tar.gz.checksum'
+        shell: 'bash'
+        run: 'python .github/workflows/download_jbr.py'
+      - id: 'step-7'
+        name: 'Setup JBR 21 for Ubuntu'
+        uses: 'gmitch215/setup-java@6d2c5e1f82f180ae79f799f0ed6e3e5efb4e664d'
+        with:
+          java-version: '21'
+          distribution: 'jdkfile'
+          jdkFile: '${{ steps.step-6.outputs.jbrLocation }}'
+        env:
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+      - id: 'step-8'
+        name: 'Dump Local Properties'
+        run: 'echo "jvm.toolchain.version=21" >> local.properties'
+      - id: 'step-9'
+        run: 'chmod -R 777 .'
+      - id: 'step-10'
+        name: 'Setup Gradle'
+        uses: 'gradle/actions/setup-gradle@v3'
+        with:
+          cache-disabled: 'true'
+      # 一次性签名密钥: 实验包不需要跟正式包的签名一致, 但 AGP 的 release 变体要有签名配置才会出带签名的 APK.
+      # 覆盖安装会因签名不同失败, 测试前先 pm uninstall.
+      - id: 'step-11'
+        name: 'Generate throwaway signing key'
+        run: |
+          set -euo pipefail
+          keytool -genkeypair -keystore ./android_signing_key -storepass android -keypass android \
+            -alias ani5 -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Izuko TV Android 5 experimental, O=izuko, C=CN"
+          ls -la ./android_signing_key
+      - id: 'step-12'
+        name: 'Generate Mock google-services.json'
+        run: |
+          echo '{"project_info":{"project_number":"0","project_id":"mock-project","storage_bucket":"mock-bucket"},"client":[{"client_info":{"mobilesdk_app_id":"1:123456789012:android:0000000000000000","android_client_info":{"package_name":"io.github.grahamzen.anime"}},"api_key":[{"current_key":"mock_key"}]},{"client_info":{"mobilesdk_app_id":"1:123456789012:android:0000000000000001","android_client_info":{"package_name":"io.github.grahamzen.anime.tv"}},"api_key":[{"current_key":"mock_key"}]}]}' > ./app/android/google-services.json
+      - id: 'step-13'
+        name: 'Build Android 5 Release APK'
+        env:
+          signing_release_storeFileFromRoot: '${{ github.workspace }}/android_signing_key'
+          signing_release_storePassword: 'android'
+          signing_release_keyAlias: 'ani5'
+          signing_release_keyPassword: 'android'
+        timeout-minutes: 180
+        run: './gradlew assembleDefaultTvRelease "-Pani.android.legacy=true" "-Pani.android.legacyMinSdk=${MIN_API}" "-Porg.gradle.daemon.idletimeout=60000" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx8g -Dkotlin.daemon.jvm.options=-Xmx6g" "-Dkotlin.daemon.jvm.options=-Xmx6g"'
+      # 先改名上传, 校验放最后: 校验用的是外部工具, 它自己出问题不该把产物弄丢.
+      - id: 'step-14'
+        name: 'Rename APK'
+        run: |
+          set -euo pipefail
+          out='app/android/build/outputs/apk/defaultTv/release'
+          ls -la "$out" || true
+          mkdir -p android5-apk
+          src=''
+          for c in "$out"/*arm64-v8a*release*.apk "$out"/*universal*release*.apk; do
+            [ -f "$c" ] || continue
+            src="$c"
+            case "$c" in
+              *arm64-v8a*) break ;;
+            esac
+          done
+          [ -n "$src" ] || { echo "::error::没找到 release APK"; exit 1; }
+          cp "$src" "android5-apk/izuko-tv-android5-api${MIN_API}-arm64.apk"
+          ls -la android5-apk
+          du -h android5-apk/*.apk
+      - id: 'step-15'
+        name: 'Upload APK'
+        uses: 'actions/upload-artifact@v4'
+        with:
+          name: 'izuko-tv-android5-apk'
+          path: 'android5-apk/*.apk'
+          retention-days: '30'
+          overwrite: 'true'
+      # 这一份清单是这个实验最有价值的输出: 代码按 minSdk 26/27 写, 降到底 21 后哪些地方裸调了
+      # 22~24 的 API, lint 会全部列出来. APK 已经上传, 这一步再慢/再出错也不该让人白等一场.
+      - id: 'step-15b'
+        name: 'Lint (NewApi 清单, 不拦构建)'
+        continue-on-error: true
+        timeout-minutes: 60
+        run: |
+          set +e
+          ./gradlew :app:android:lintDefaultTvRelease "-Pani.android.legacy=true" "-Pani.android.legacyMinSdk=${MIN_API}" \
+            "-Dorg.gradle.jvmargs=-Xmx8g" "-Dkotlin.daemon.jvm.options=-Xmx6g"
+          report=app/android/build/reports/lint-results-defaultTvRelease.txt
+          if [ -f "$report" ]; then
+            echo '--- NewApi / NewerVersion ---'
+            grep -E "NewApi|NewerVersion|InlinedApi" -A2 "$report" | head -200
+            echo "完整报告: $report"
+          else
+            echo '::warning::没找到 lint 报告'
+          fi
+      # 两道校验, 都只警告不拦截 —— 产物已经上传, 校验手段自己出问题不该让整个 run 变红.
+      - id: 'step-16'
+        name: 'Verify minSdk / dex version / v1 signature'
+        run: |
+          set +e
+          apk="$(ls android5-apk/*.apk | head -1)"
+          echo "APK: $apk"
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          bt="$(ls -d "$sdk"/build-tools/* 2>/dev/null | tail -1)"
+          echo "build-tools: $bt"
+
+          echo '--- minSdk ---'
+          aapt2="$(ls "$bt"/aapt2 2>/dev/null)"
+          if [ -n "$aapt2" ]; then
+            "$aapt2" dump badging "$apk" 2>&1 | grep -E "^(package|minSdk|sdkVersion|targetSdk)" | head -5
+          else
+            echo "::warning::找不到 aapt2, 跳过 minSdk 校验"
+          fi
+
+          echo '--- dex version (Android 5.0 只认 035) ---'
+          python3 - "$apk" <<'PY'
+          import sys, zipfile
+          apk = sys.argv[1]
+          bad = False
+          with zipfile.ZipFile(apk) as z:
+              dexs = sorted(n for n in z.namelist() if n.startswith('classes') and n.endswith('.dex'))
+              for n in dexs:
+                  magic = z.read(n)[:8]
+                  ver = magic[4:7].decode('ascii', 'replace')
+                  ok = ver <= '035'
+                  bad |= not ok
+                  print(f'  {n}: {magic!r} version={ver} {"OK" if ok else "TOO NEW"}')
+              if not dexs:
+                  print('::warning::APK 里没找到 dex')
+          sys.exit(1 if bad else 0)
+          PY
+          echo "dex 校验退出码: $?"
+
+          echo '--- signature ---'
+          apksigner="$(ls "$bt"/apksigner 2>/dev/null)"
+          if [ -n "$apksigner" ]; then
+            "$apksigner" verify --verbose --min-sdk-version 21 "$apk" 2>&1 | head -12
+          else
+            echo "::warning::找不到 apksigner"
+          fi

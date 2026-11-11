@@ -192,6 +192,11 @@ phone 变体的合并清单里 `LEANBACK_LAUNCHER` / `android:banner` / `AniDrea
 **`assembleDefaultDebug` / `compileDefaultDebugKotlin` 这些名字已经不存在**(Gradle 会报
 ambiguous),CI 与文档都必须写全变体名。
 
+**Android 5.0 (API 21) 实验包**: `./gradlew assembleDefaultTvRelease "-Pani.android.legacy=true" "-Pani.android.legacyMinSdk=21"`
+(CI 入口 `.github/workflows/fork-android5-build.yml`)。依赖库的底线是 API 23, 这类包只能靠
+manifest `tools:overrideLibrary` 强推, 属于实验性质, 不随 Release 发布; 细节与上机判定见
+`docs/fork/android5.md`。
+
 ## 五、fork 新增文件 (rebase 零冲突)
 
 ### TV 专属 (上游合并时整体保留)
@@ -256,6 +261,8 @@ ambiguous),CI 与文档都必须写全变体名。
 | 文件 | 用途 |
 |---|---|
 | `.github/workflows/fork-release.yml` | fork 专属 Android release 流程 (与上游 `release.yml` 隔离) |
+| `.github/workflows/fork-legacy-build.yml` | Android 7.1 (API 25) 兼容包, 产物只作 artifact |
+| `.github/workflows/fork-android5-build.yml` | Android 5.0 (API 21) 实验包, 产物只作 artifact, 见 `docs/fork/android5.md` |
 | `.github/workflows/notify-mirror.yml` | release 发布后通知镜像仓库 |
 
 ### 文案 / rebase 工具
@@ -264,6 +271,7 @@ ambiguous),CI 与文档都必须写全变体名。
 |---|---|
 | `app-lang .../res/values*/strings_izuko.xml` (4 份) | fork 新增的文案; 新 key 一律写这里, 不写 `strings.xml` |
 | `scripts/fork-rebase.sh` `scripts/rebase/` | 追上游的流程脚本与冲突自动规则, 见第七节 |
+| `docs/fork/android5.md` | Android 5.0 (API 21) 实验包: 依赖底线、原生库符号实测、上机判定 |
 
 ## 六、修改的上游文件及原因
 

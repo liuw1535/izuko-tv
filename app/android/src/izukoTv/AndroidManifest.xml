@@ -15,6 +15,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
         xmlns:tools="http://schemas.android.com/tools">
 
+    <!--
+      兼容包 (minSdk 21, `-Pani.android.legacy=true -Pani.android.legacyMinSdk=21`) 才需要:
+      2026 年这一代 AndroidX 的底线已经是 API 23 (Android 6.0), navigation-compose / onnxruntime 是 24,
+      anitorrent 是 26. 不 override 的话 manifest 合并直接报错, 连包都出不来.
+
+      正式包 (minSdk 27) 下这些名字一个都不会命中, 属性等于不存在 —— 但反过来也意味着
+      兼容包不再享受「库声明了更高 minSdk 就拦住你」这层保护, 所以只把这条挂在 tv flavor 上,
+      手机包该拦的还是会拦.
+
+      这里有覆盖不到的库时, AGP 的报错会明确写出缺哪个包名, 把它加进来即可.
+      实验记录与结论见 docs/fork/android5.md.
+    -->
+    <uses-sdk tools:overrideLibrary="ai.onnxruntime,androidx.activity,androidx.activity.compose,androidx.compose.animation,androidx.compose.foundation,androidx.compose.material,androidx.compose.material3,androidx.compose.material3.adaptive,androidx.compose.runtime,androidx.compose.ui,androidx.compose.ui.tooling,androidx.compose.ui.tooling.preview,androidx.datastore.core,androidx.datastore.datastore.preferences.anchor,androidx.datastore.preferences,androidx.lifecycle.compose,androidx.lifecycle.lifecycle.runtime.anchor,androidx.lifecycle.process,androidx.lifecycle.service,androidx.lifecycle.viewmodel,androidx.lifecycle.viewmodel.compose,androidx.media3.common,androidx.media3.container,androidx.media3.datasource,androidx.media3.datasource.okhttp,androidx.media3.decoder,androidx.media3.effect,androidx.media3.exoplayer,androidx.media3.exoplayer.dash,androidx.media3.exoplayer.hls,androidx.media3.exoplayer.image,androidx.media3.exoplayer.rtsp,androidx.media3.exoplayer.smoothstreaming,androidx.media3.extractor,androidx.media3.muxer,androidx.media3.session,androidx.media3.transformer,androidx.media3.ui,androidx.navigation,androidx.navigation.compose,androidx.navigation3.navigation3.runtime.anchor,androidx.paging.paging.compose.anchor,androidx.paging.runtime,androidx.profileinstaller,androidx.room,androidx.room.ktx,androidx.room.paging,androidx.room.room.runtime.anchor,androidx.room.runtime,androidx.savedstate,androidx.sqlite,androidx.sqlite.driver,androidx.sqlite.driver.bundled,androidx.tv.material,androidx.window,androidx.window.core,com.github.panpf.sketch.compose.core,com.github.panpf.zoomimage.compose.sketch4.core,dev.chrisbanes.haze,io.github.vinceglb.filekit.dialogs,org.jetbrains.androidx.compose.animation,org.jetbrains.androidx.compose.foundation,org.jetbrains.androidx.compose.material3,org.jetbrains.androidx.compose.material3.adaptive,org.jetbrains.androidx.compose.ui,org.jetbrains.androidx.lifecycle.viewmodel.compose,org.jetbrains.androidx.navigation,org.jetbrains.androidx.navigation.compose,org.jetbrains.androidx.navigation3.ui,org.jetbrains.androidx.savedstate,org.jetbrains.androidx.window,org.jetbrains.compose.components.resources,org.jetbrains.compose.material,org.jetbrains.compose.runtime,org.jetbrains.compose.ui,org.jetbrains.lifecycle.runtime,org.jetbrains.lifecycle.runtime.compose,org.jetbrains.lifecycle.viewmodel,org.openani.anitorrent.natives" />
+
     <!-- 主屏预览频道 (热门动画 / 继续观看) 写入系统 TvProvider -->
     <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA" />
     <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA" />

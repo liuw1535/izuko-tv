@@ -151,6 +151,15 @@ android {
         // 这是模块级设置, 开了就是所有用户一起换成回填实现, 所以正式包坚决不开. 见 buildLegacyAndroidApp.
         isCoreLibraryDesugaringEnabled = buildLegacyAndroidApp
     }
+    lint {
+        // 兼容包 (minSdk 21) 下 NewApi 一定会报一批: 代码是按 minSdk 26/27 写的, 库声明也是 23.
+        // 这些正是这次实验要看的清单, 要读不要拦: 让 lint 照常跑、把问题打进日志, 但别让它们把产物拦在门外.
+        // 正式包 (minSdk 27) 维持默认行为. 见 docs/fork/android5.md.
+        if (buildLegacyAndroidApp && androidMinSdk < 24) {
+            checkReleaseBuilds = false
+            abortOnError = false
+        }
+    }
 }
 
 dependencies {
