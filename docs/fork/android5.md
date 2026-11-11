@@ -83,6 +83,20 @@ v1 (JAR) 签名, 打包后的 APK 必须带 v1 才会被接受。
 产物: `izuko-tv-android5-apk` (artifact), 只含 arm64-v8a。签名密钥在 runner 上现生成,
 与正式包不同 —— 上机前先 `pm uninstall io.github.grahamzen.anime.tv`。
 
+### 两段式 minSdk (为什么要事后改清单)
+
+manifest 合并只会拿**声明的** minSdk 去和每个库比, 一个库报一次错、一轮 CI 六分钟。而 D8 出的 dex
+版本只取决于 `minSdk < 24` 与否 —— 21 和 23 都出 **DEX 035**, 默认方法 / lambda / `java.time` /
+`java.nio.file` 的脱糖完全一样。所以 CI 里走两段:
+
+1. Gradle 按 `buildMinApi` (默认 **23**) 构建 —— 依赖库里 99% 的底线就在这一层, 合并一次就过;
+2. `patch-apk-min-sdk.py` 把清单里的 `minSdkVersion` 二进制改成 `minApi` (默认 **21**),
+   `zipalign` 对齐后 `apksigner` 重新签 (v1 + v2, Android 5 只认 v1)。
+
+两段产出的代码与「直接按 21 构建」逐字节等价, 只是绕开了合并期的逐个比对。
+清单里的 `tools:overrideLibrary` 仍然保留: `navigation-compose` / `onnxruntime` 是 24,
+`anitorrent` 是 26, 23 也过不去。
+
 ## 三、上机怎么判定
 
 ```bash

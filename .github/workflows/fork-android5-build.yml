@@ -3,10 +3,15 @@
 # 目的只有一个: 回答「这个 App 在 Android 5 上到底能不能起来」. 背景与已完成的分析见 docs/fork/android5.md.
 #
 # 与 fork-legacy-build.yml (API 25) 的区别:
-# - minSdk 由 `-Pani.android.legacyMinSdk=21` 压到 21, manifest 里对 23/24/26 的库做了 overrideLibrary;
-# - 只出 arm64-v8a: 目标设备 (M31/MStar 6A828) 是 64 位, 且它 /data 只剩几百 MB, universal 包塞不进去;
+# - **两段式 minSdk**: Gradle 按 23 构建 (buildMinApi), 出包后把清单里的 minSdkVersion 二进制改成 21
+#   (targetMinApi, 见 patch-apk-min-sdk.py) 再重新签名.
+#   原因: 2026 年这一代 AndroidX 的底线是 23, manifest 合并只会拿声明的 minSdk 去和每个库比, 一个库报一次错,
+#   一轮 CI 六分钟; 而 D8 出的 dex 版本只取决于 minSdk < 24 与否 —— 21 和 23 都出 DEX 035,
+#   脱糖结果完全一样。所以「按 23 构建 + 事后改清单」产出的代码与「按 21 构建」逐字节等价。
+#   清单里那些 overrideLibrary 仍保留 (navigation-compose / onnxruntime 是 24, anitorrent 是 26, 23 也过不去)。
+# - 只出 arm64-v8a: 目标设备 (MStar 6A828) 是 64 位, 且它 /data 只剩几百 MB, universal 包塞不进去;
 # - 不需要任何仓库 Secret: 签名密钥在 runner 上现生成 (一次性), 要覆盖安装就得先卸载旧的;
-# - 末尾多一道 **dex 版本**校验: 只有源码重编、D8 按 minSdk 21 出 DEX 035, Android 5 的 dex2oat 才认.
+# - 末尾多一道 **dex 版本**校验: 只有源码重编、D8 按 minSdk < 24 出 DEX 035, Android 5 的 dex2oat 才认.
 #   (拿 apktool 改 manifest 出来的包一定是 DEX 039, 装到 Android 5 上就是「无法进行 dex2oat 编译」.)
 #
 # 触发方式: Actions 页面手动 Run workflow. 刻意不创建 Release/prerelease —— UpdateChecker 拉的是
@@ -16,9 +21,13 @@ on:
   workflow_dispatch:
     inputs:
       minApi:
-        description: 'minSdk 覆盖值 (21 = Android 5.0)'
+        description: '最终写进 APK 的 minSdk (21 = Android 5.0)'
         required: false
         default: '21'
+      buildMinApi:
+        description: 'Gradle 构建时用的 minSdk (要满足依赖库的声明, 23 = Android 6.0)'
+        required: false
+        default: '23'
 permissions:
   contents: 'read'
 concurrency:
@@ -31,6 +40,7 @@ jobs:
     - 'ubuntu-24.04'
     env:
       MIN_API: '${{ inputs.minApi || ''21'' }}'
+      BUILD_MIN_API: '${{ inputs.buildMinApi || ''23'' }}'
     steps:
       - id: 'step-0'
         uses: 'actions/checkout@v4'
@@ -124,7 +134,7 @@ jobs:
         run: |
           set +e
           ./gradlew -I .github/workflows/scan-android-minsdk.init.gradle --no-configuration-cache --console=plain \
-            "-Pani.android.legacy=true" "-Pani.android.legacyMinSdk=${MIN_API}" \
+            "-Pani.android.legacy=true" "-Pani.android.legacyMinSdk=21" \
             "-Dorg.gradle.jvmargs=-Xmx8g" :app:android:scanAndroidMinSdk 2>&1 | tee scan-minsdk.log | tail -120
       - id: 'step-13'
         name: 'Build Android 5 Release APK'
@@ -134,7 +144,33 @@ jobs:
           signing_release_keyAlias: 'ani5'
           signing_release_keyPassword: 'android'
         timeout-minutes: 180
-        run: './gradlew assembleDefaultTvRelease "-Pani.android.legacy=true" "-Pani.android.legacyMinSdk=${MIN_API}" "-Porg.gradle.daemon.idletimeout=60000" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx8g -Dkotlin.daemon.jvm.options=-Xmx6g" "-Dkotlin.daemon.jvm.options=-Xmx6g"'
+        run: './gradlew assembleDefaultTvRelease "-Pani.android.legacy=true" "-Pani.android.legacyMinSdk=${BUILD_MIN_API}" "-Porg.gradle.daemon.idletimeout=60000" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx8g -Dkotlin.daemon.jvm.options=-Xmx6g" "-Dkotlin.daemon.jvm.options=-Xmx6g"'
+      # 把清单里的 minSdkVersion 从 buildMinApi 改成 targetMinApi 并重新签名。
+      # 重写 zip 会把原来那套签名块 (v1/v2) 丢掉, 所以必须 apksigner 重新签, 而且 v1 必须开
+      # (Android 5 不认 v2-only 的包)。
+      - id: 'step-13b'
+        name: 'Patch minSdk in manifest + re-sign'
+        run: |
+          set -euo pipefail
+          if [ "${BUILD_MIN_API}" = "${MIN_API}" ]; then
+            echo "buildMinApi == targetMinApi (${MIN_API}), 不需要补丁"
+            exit 0
+          fi
+          out='app/android/build/outputs/apk/defaultTv/release'
+          src="$(ls "$out"/*arm64-v8a*release*.apk | head -1)"
+          echo "src=$src"
+          python3 .github/workflows/patch-apk-min-sdk.py "$src" "$MIN_API" "$src.patched"
+          bt="$(ls -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/* | tail -1)"
+          "$bt/zipalign" -f -p 4 "$src.patched" "$src.aligned"
+          "$bt/apksigner" sign \
+            --ks ./android_signing_key --ks-key-alias ani5 \
+            --ks-pass pass:android --key-pass pass:android \
+            --min-sdk-version "$MIN_API" \
+            --v1-signing-enabled true --v2-signing-enabled true \
+            "$src.aligned"
+          mv "$src.aligned" "$src"
+          rm -f "$src.patched"
+          ls -la "$src"
       # 先改名上传, 校验放最后: 校验用的是外部工具, 它自己出问题不该把产物弄丢.
       - id: 'step-14'
         name: 'Rename APK'
@@ -171,7 +207,7 @@ jobs:
         timeout-minutes: 60
         run: |
           set +e
-          ./gradlew :app:android:lintDefaultTvRelease "-Pani.android.legacy=true" "-Pani.android.legacyMinSdk=${MIN_API}" \
+          ./gradlew :app:android:lintDefaultTvRelease "-Pani.android.legacy=true" "-Pani.android.legacyMinSdk=${BUILD_MIN_API}" \
             "-Dorg.gradle.jvmargs=-Xmx8g" "-Dkotlin.daemon.jvm.options=-Xmx6g"
           report=app/android/build/reports/lint-results-defaultTvRelease.txt
           if [ -f "$report" ]; then
