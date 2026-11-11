@@ -272,6 +272,8 @@ manifest `tools:overrideLibrary` 强推, 属于实验性质, 不随 Release 发�
 | `app-lang .../res/values*/strings_izuko.xml` (4 份) | fork 新增的文案; 新 key 一律写这里, 不写 `strings.xml` |
 | `scripts/fork-rebase.sh` `scripts/rebase/` | 追上游的流程脚本与冲突自动规则, 见第七节 |
 | `docs/fork/android5.md` | Android 5.0 (API 21) 实验包: 依赖底线、原生库符号实测、上机判定 |
+| `utils/ktor-client .../BundledRootCertificates.kt` | 随包的 8 张根证书 (ISRG / GTS / Amazon / DigiCert / SSL.com), 只在 Android 5/6 生效, 见 `docs/fork/android5.md` |
+| `utils/ktor-client .../LegacyTrustAnchors.jvm.kt` `.../EngineLegacyTrustAnchors.kt` (+ apple 空实现) | 老系统的信任库 = 系统根 ∪ 随包的根; `network_security_config` 在 API 24 以下不生效, 只能应用内补 |
 
 ## 六、修改的上游文件及原因
 
@@ -343,6 +345,16 @@ fork 上整条流水线是 skipped)。
 | `tools/update/AndroidUpdateInstaller.kt` | FileProvider 安装 APK |
 | `app-data .../captcha/CaptchaBrowser.kt` `InteractiveSolveDialog.kt` `WebViewCaptchaBrowser.kt` (+desktop/test 签名同步) | 验证码虚拟光标: `View(onExitRequest, onConfirmRequest)` 默认参数扩展 |
 | `app-lang` / `app/shared` `strings.xml` | 改写部分上游文案的措辞 (`app/shared` 那份另有远程保活通知两条新增); `app-lang` 的新增文案都在同目录 `strings_izuko.xml`。rebase 时按 key 合并, 见第七节 |
+
+### 老系统 TLS (仅 Android 5/6 生效)
+
+| 文件 | 原因 |
+|---|---|
+| `utils/ktor-client .../DefaultClient.kt` | 一行钩子 `engineLegacyTrustAnchors()`, 紧跟 `engineFallbackDns()` |
+| `utils/ktor-client .../PublicDns.kt` | DoH 客户端 `.legacyTrustAnchors()` 一行 |
+| `video-player .../PlaybackHttpDataSource.kt` `.../RangeHttpClient.kt` | 播放/下载自建的 OkHttp 客户端同样带随包的根; `RangeHttpClient` 的 `trustManager` 改成「有补充就用补充」 |
+
+API 24 及以上全部无变化 (返回 null / 空操作)。详见 `docs/fork/android5.md`。
 
 ### 平台无关修复 (上游 PR 候选 — 合并后从本表删除)
 

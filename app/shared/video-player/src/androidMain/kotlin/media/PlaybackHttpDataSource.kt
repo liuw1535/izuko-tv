@@ -24,6 +24,7 @@ import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import me.him188.ani.utils.ktor.FallbackDns
+import me.him188.ani.utils.ktor.legacyTrustAnchors
 import me.him188.ani.utils.logging.info
 import me.him188.ani.utils.logging.logger
 
@@ -89,6 +90,8 @@ internal fun createPlaybackHttpDataSourceFactory(
             .readTimeout(DefaultHttpDataSource.DEFAULT_READ_TIMEOUT_MILLIS.toLong(), TimeUnit.MILLISECONDS)
             .dns(FallbackDns.Default)
             .eventListenerFactory(PlaybackRequestLog)
+            // 老系统 (Android 5/6) 的系统根证书库缺 ISRG / GTS 的根, 在线源的视频地址会握手失败
+            .legacyTrustAnchors()
             .apply { proxyConfig?.let { playbackProxy(it) } }
             .build()
     }

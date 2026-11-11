@@ -47,6 +47,8 @@ object PublicDns {
             .connectTimeout(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
             .readTimeout(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
             .callTimeout(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+            // 老系统 (Android 5/6) 的系统根证书库里没有 ISRG / GTS 的根, DoH 端点会握手失败. 见 LegacyTrustAnchors.
+            .legacyTrustAnchors()
             .build()
     }
 

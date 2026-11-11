@@ -76,7 +76,7 @@ v1 (JAR) 签名, 打包后的 APK 必须带 v1 才会被接受。
 adb connect 192.168.0.120:5555
 adb install -r -g izuko-tv-android5-api21-arm64.apk
 adb logcat -c && adb shell am start -n io.github.grahamzen.anime.tv/me.him188.ani.android.MainActivity
-adb logcat -v epoch | grep -E "AndroidRuntime|FATAL|UnsatisfiedLinkError|NoSuchMethodError|NoClassDefFoundError|Verification"
+adb logcat -v epoch | grep -E "AndroidRuntime|FATAL|UnsatisfiedLinkError|NoSuchMethodError|NoClassDefFoundError|Verification|bundled roots"
 ```
 
 | 现象 | 含义 |
@@ -84,13 +84,35 @@ adb logcat -v epoch | grep -E "AndroidRuntime|FATAL|UnsatisfiedLinkError|NoSuchM
 | `dex2oat` 失败 / 安装报错 | dex 不是 035 或签名缺 v1, 回 CI 看校验步骤 |
 | `UnsatisfiedLinkError` | 命中了没被 SDK_INT 挡住的原生库, 按上面的表补门 |
 | `NoSuchMethodError` / `NoClassDefFoundError` | 某个库在 21 上裸调了 23/24 的 API, 看堆栈定位, 单点可以补 |
+| `SSLHandshakeException` / `CertPathValidatorException` | 先看日志里有没有 `Using system trust store plus 8 bundled roots` —— 没有就是补充信任库没装上; 有则说明对方用的根不在那 8 张里, 加进去即可 |
 | 能进首页但卡顿/OOM | 硬件上限问题 (1.5 GB / Mali-450 ES 2.0 / eMMC), 换设备比改代码便宜 |
 
-## 四、还没做的两件事
+## 四、HTTPS 根证书 (已做)
 
-1. **HTTPS 根证书**: `android:networkSecurityConfig` 是 API 24 才生效的, 在 Android 5 上被忽略。
-   系统信任库没有 ISRG Root X1/X2, 而 Let's Encrypt 的老交叉签名 (DST Root CA X3) 已过期 ——
-   直接后果是大量站点握手失败。可行方向: 把根证书打进 APK, 用自定义 `X509TrustManager`
-   装到 Ktor 的 OkHttp 引擎上; 或者在已 root 的机器上往 `/system/etc/security/cacerts/` 里塞
-   (该机上有 Dirty COW, 能覆盖已有文件但建不了新文件)。
-2. **BT / 图片验证码**: 见上面第 2 条, 需要按 `android-21` 重编原生库。
+`android:networkSecurityConfig` 是 **API 24** 才生效的, 在 Android 5/6 上系统整个忽略它 ——
+所以清单里 `@xml/network_security_config` 那两张 SSL.com 根在 API 21~23 上等于不存在。
+而 Android 5.0.1 的系统信任库里没有 ISRG Root X1/X2 (Android 7.1.1 才进), Let's Encrypt 用
+DST Root CA X3 做的那份交叉签名 2021-09 已过期 —— 不补这一块, 大量站点直接握手失败, App 起来了也拉不到数据。
+
+做法是在**应用内**建信任库 = 系统根 ∪ 随包的 8 张根证书, 交给 OkHttp:
+
+| 位置 | 作用 |
+|---|---|
+| `utils/ktor-client` `.../BundledRootCertificates.kt` | 8 张根证书 (ISRG X1/X2、GTS R1/R4、Amazon Root CA 1、DigiCert Global Root G2、SSL.com RSA/ECC 2022), 每张都标了 SHA-256 指纹, 均取自 Mozilla 根证书库 |
+| `utils/ktor-client` `.../LegacyTrustAnchors.jvm.kt` | 把 `AndroidCAStore` 里的系统根和上面 8 张平铺进同一个 KeyStore, 建出 `SSLSocketFactory` + `X509TrustManager`. **只在 Android API 21~23 生效**, 其余平台/版本返回 `null`, 行为与之前完全一致 |
+| `.../EngineLegacyTrustAnchors.kt` (common + apple) | expect/actual: common 声明, jvm 落实, apple 空实现 |
+| `DefaultClient.kt` | 一行钩子 `engineLegacyTrustAnchors()`, 紧跟 `engineFallbackDns()` |
+| `PublicDns.kt` (DoH 客户端) | `.legacyTrustAnchors()` |
+| `PlaybackHttpDataSource.kt` / `RangeHttpClient.kt` (播放与下载) | 同上 —— 这两个客户端自己建 OkHttp, 不走 Ktor |
+
+主机名校验仍由 OkHttp 自己做, 证书链走标准 PKIX, 只是多认几张根。API 24+ 走原来的网络安全配置, 不受影响。
+
+**WebView 覆盖不到**: 那台电视的 WebView 是 37 版, 它用系统信任库, 应用没法替它加根。
+需要 WebView 的规则源在系统层面装证书之前会失败 (机器已 root, 可以往 `/system/etc/security/cacerts/`
+里覆盖一个闲置根证书的文件 —— Dirty COW 能改写不能新建)。
+
+## 五、还没做的
+
+**BT / 图片验证码**: 见上面第一节第 2 条, 需要按 `android-21` 重编原生库 (`torrent/anitorrent/native/build.sh`
+传 `ANDROID_PLATFORM=android-21`; 21 上 libtorrent 走 netlink 枚举网卡, Android 5 允许, 但 Android 11 起
+应用不许绑 netlink, 所以那份产物只能给老设备用)。onnxruntime 只能换更老的版本或继续不用。

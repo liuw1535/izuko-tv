@@ -13,6 +13,7 @@ import androidx.annotation.OptIn as AndroidxOptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import me.him188.ani.utils.ktor.LegacyTrustAnchors
 import me.him188.ani.utils.ktor.PublicDns
 import me.him188.ani.utils.logging.info
 import me.him188.ani.utils.logging.logger
@@ -70,9 +71,9 @@ internal object RangeHttpClients {
     private val clients = ConcurrentHashMap<PlaybackProxyConfig, OkHttpClient>()
     private val direct: OkHttpClient by lazy { build(null) }
 
-    /** 系统默认的证书校验 (同 OkHttp 默认用的那个), 套接字工厂换成握手限时的. */
+    /** 系统默认的证书校验 (同 OkHttp 默认用的那个), 套接字工厂换成握手限时的. 老系统上换成「系统根 ∪ 随包的根」, 见 [LegacyTrustAnchors]. */
     private val trustManager: X509TrustManager by lazy {
-        TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).run {
+        LegacyTrustAnchors.value?.trustManager ?: TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).run {
             init(null as KeyStore?)
             trustManagers.filterIsInstance<X509TrustManager>().first()
         }
