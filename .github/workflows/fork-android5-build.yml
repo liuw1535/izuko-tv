@@ -115,6 +115,17 @@ jobs:
         name: 'Generate Mock google-services.json'
         run: |
           echo '{"project_info":{"project_number":"0","project_id":"mock-project","storage_bucket":"mock-bucket"},"client":[{"client_info":{"mobilesdk_app_id":"1:123456789012:android:0000000000000000","android_client_info":{"package_name":"io.github.grahamzen.anime"}},"api_key":[{"current_key":"mock_key"}]},{"client_info":{"mobilesdk_app_id":"1:123456789012:android:0000000000000001","android_client_info":{"package_name":"io.github.grahamzen.anime.tv"}},"api_key":[{"current_key":"mock_key"}]}]}' > ./app/android/google-services.json
+      # manifest 合并一次只报一个 minSdk 冲突的库, 一轮 CI 六分钟。这个 init script 直接读 Gradle
+      # 缓存里已下载的 AAR, 一次把清单全列出来 —— 失败也不拦构建 (读不出来就退回看 AGP 的报错)。
+      - id: 'step-12b'
+        name: 'Scan AAR minSdk (完整清单)'
+        continue-on-error: true
+        timeout-minutes: 30
+        run: |
+          set +e
+          ./gradlew -I .github/workflows/scan-android-minsdk.init.gradle --no-configuration-cache --console=plain \
+            "-Pani.android.legacy=true" "-Pani.android.legacyMinSdk=${MIN_API}" \
+            "-Dorg.gradle.jvmargs=-Xmx8g" :app:android:scanAndroidMinSdk 2>&1 | tee scan-minsdk.log | tail -120
       - id: 'step-13'
         name: 'Build Android 5 Release APK'
         env:

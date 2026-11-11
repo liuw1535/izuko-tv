@@ -27,6 +27,19 @@ Android **5.0.1 / API 21**, /data 只剩 ~485 MB)。设备侧的探索记录见�
 该属性只挂在 **tv flavor** 的清单上 (`app/android/src/izukoTv/AndroidManifest.xml`),
 手机包与正式包仍享受「库声明更高 minSdk 就拦住你」这层保护。
 
+manifest 合并一次只报一个库, 要一次拿全清单就在构建前跑一遍扫描 (直接读 Gradle 缓存里的 AAR, 不额外联网):
+
+```bash
+./gradlew -I .github/workflows/scan-android-minsdk.init.gradle --no-configuration-cache \
+    -Pani.android.legacy=true -Pani.android.legacyMinSdk=21 :app:android:scanAndroidMinSdk
+```
+
+输出里的 `pkg=` 就是要加进 `tools:overrideLibrary` 的包名。CI 里的 `Scan AAR minSdk (完整清单)` 步骤跑的就是它。
+
+除 androidx 外实测还有两张: `com.google.firebase` (firebase-common 22.0.1, minSdk 23) —— 运行时不会被走到:
+Firebase 只在 `settings.isAnalyticsEnabled && currentAniBuildConfig.analyticsEnabled` 为真时才初始化,
+而实验包的 `ani.enable.firebase=false` 让后者恒为 false。
+
 ### 2. 两个原生库在 API 21 上 `dlopen` 必失败
 
 用 NDK r30 的 `llvm-readelf` 把这些 `.so` 的未定义符号和 API 21 的 libc stub 逐个比对:
