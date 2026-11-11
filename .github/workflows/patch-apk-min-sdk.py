@@ -24,28 +24,34 @@ RES_STRING_POOL_TYPE = 0x0001
 RES_XML_START_ELEMENT_TYPE = 0x0102
 
 
-def read_string_pool(body):
-    string_count, style_count, flags, strings_start, styles_start = struct.unpack('<IIIII', body[:20])
-    offsets = struct.unpack('<%dI' % string_count, body[20:20 + 4 * string_count])
+def read_string_pool(data, chunk_start, chunk_size, chunk_header_size):
+    # 字符串池的字段就在 chunk header 之后 (headerSize 已经包含了那 8 字节), 而 offsets 数组从 chunk_header_size 开始;
+    # stringsStart 是相对 **chunk 起点** 的偏移, 不是相对 body 的。
+    fields = chunk_start + 8
+    string_count, style_count, flags, strings_start, styles_start = struct.unpack('<IIIII', data[fields:fields + 20])
+    offsets_start = chunk_start + chunk_header_size
+    offsets = struct.unpack('<%dI' % string_count, data[offsets_start:offsets_start + 4 * string_count])
     utf8 = bool(flags & 0x100)
+    base = chunk_start + strings_start
+    chunk_end = chunk_start + chunk_size
     strings = []
     for offset in offsets:
-        pos = strings_start + offset
+        pos = base + offset
         if utf8:
-            pos += 1 if body[pos] < 0x80 else 2  # utf-16 长度
-            length = body[pos]
+            pos += 1 if data[pos] < 0x80 else 2      # utf-16 长度
+            length = data[pos]
             pos += 1
             if length & 0x80:
-                length = ((length & 0x7F) << 8) | body[pos]
+                length = ((length & 0x7F) << 8) | data[pos]
                 pos += 1
-            strings.append(body[pos:pos + length].decode('utf-8', 'replace'))
+            strings.append(data[pos:min(pos + length, chunk_end)].decode('utf-8', 'replace'))
         else:
-            length = struct.unpack('<H', body[pos:pos + 2])[0]
+            length = struct.unpack('<H', data[pos:pos + 2])[0]
             pos += 2
             if length & 0x8000:
-                length = ((length & 0x7FFF) << 16) | struct.unpack('<H', body[pos:pos + 2])[0]
+                length = ((length & 0x7FFF) << 16) | struct.unpack('<H', data[pos:pos + 2])[0]
                 pos += 2
-            strings.append(body[pos:pos + 2 * length].decode('utf-16-le', 'replace'))
+            strings.append(data[pos:min(pos + 2 * length, chunk_end)].decode('utf-16-le', 'replace'))
     return strings
 
 
@@ -62,7 +68,7 @@ def patch_manifest(data, new_min_sdk):
             break
         body = pos + chunk_header_size
         if chunk_type == RES_STRING_POOL_TYPE:
-            strings = read_string_pool(data[body:pos + chunk_size])
+            strings = read_string_pool(data, pos, chunk_size, chunk_header_size)
         elif chunk_type == RES_XML_START_ELEMENT_TYPE:
             name_index, attr_start, attr_size, attr_count = struct.unpack('<IHHH', data[body + 4:body + 14])
             element = strings[name_index] if name_index < len(strings) else ''
@@ -82,6 +88,13 @@ def patch_manifest(data, new_min_sdk):
     return False, old_value
 
 
+def is_signature_file(name):
+    if not name.startswith('META-INF/'):
+        return False
+    upper = name.upper()
+    return upper == 'META-INF/MANIFEST.MF' or upper.endswith(('.SF', '.RSA', '.DSA', '.EC'))
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
@@ -99,6 +112,9 @@ def main():
 
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, 'w') as zout:
         for info in zin.infolist():
+            # 旧的 v1 签名文件必须丢掉: 它们签的是改之前的清单, 留着只会让重签后的包验签失败
+            if is_signature_file(info.filename):
+                continue
             if info.filename == 'AndroidManifest.xml':
                 data = bytes(patched)
             else:
